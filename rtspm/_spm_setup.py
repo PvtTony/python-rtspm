@@ -134,9 +134,9 @@ def spm_hrf(rt, fmri_t):
     p = np.array([6, 16, 1, 1, 6, 0, 32])
 
     dt = rt / fmri_t
-    u = np.array(range(0, (p[6] / dt).__ceil__() + 1), ndmin=2)
+    u = np.array(range(0, np.ceil(p[6] / dt).astype(np.int64) + 1), ndmin=2)
     hrf = spm_Gpdf(u, p[0] / p[2], dt / p[2]) - spm_Gpdf(u, p[1] / p[3], dt / p[3]) / p[4]
-    hrf = hrf[np.array(range(0, (p[6] / rt).__floor__() + 1), ndmin=2) * fmri_t]
+    hrf = hrf[np.array(range(0, np.floor(p[6] / rt).astype(np.int64) + 1), ndmin=2) * fmri_t]
     hrf = hrf.T / np.sum(hrf, axis=None)
 
     return hrf, p
