@@ -122,7 +122,7 @@ def spm_realign_rt(r, flags, ind_vol, ind_first_vol, a0, x1, x2, x3, deg, b):
         lkp -= 1
 
     if ind_vol == ind_first_vol:
-
+        # print("pppppp")
         template_mat = r[0]["mat"][:3, :3]
         skip = (1 / np.sqrt(np.sum(template_mat ** 2, axis=0))) * flags["sep"]
         d = r[0]["dim"][:3]
@@ -145,17 +145,18 @@ def spm_realign_rt(r, flags, ind_vol, ind_first_vol, a0, x1, x2, x3, deg, b):
             x2 = add_noise(x2, 0.5)
             x3 = add_noise(x3, 0.5)
 
-        x1 = x1.ravel()
-        x2 = x2.ravel()
-        x3 = x3.ravel()
+        x1 = x1.ravel(order='F').reshape(-1,1)
+        x2 = x2.ravel(order='F').reshape(-1,1)
+        x3 = x3.ravel(order='F').reshape(-1,1)
 
         # Compute rate of change of chi2 w.r.t changes in parameters(matrix A)
         # ----------------------------------------------------------------------
-        v, r[0]["C"] = smooth_vol(r[0], flags["interp"], flags["wrap"], flags["fwhm"])
-        temp_d = np.array([1, 1, 1]) * int(flags['interp'])
-        deg = np.hstack((temp_d.T, np.squeeze(flags['wrap'])))
-        deg = np.array(deg, ndmin=2).T
+        v, r[0]["C"] = smooth_vol(r[0], flags["interp"], flags["wrap"], flags["fwhm"],'nii')
+        # temp_d = np.array([1, 1, 1]) * int(flags['interp'])
+        # deg = np.hstack((temp_d.T, np.squeeze(flags['wrap'])))
+        # deg = np.array(deg, ndmin=2).T
 
+        deg = np.array([[4, 0], [4, 0], [4, 0]])
         g, d_g1, d_g2, d_g3 = spm.bsplins_multi(v, x1, x2, x3, deg)
         a0 = make_a(r[0]["mat"], x1, x2, x3, d_g1, d_g2, d_g3, lkp)
         b = g
@@ -171,7 +172,7 @@ def spm_realign_rt(r, flags, ind_vol, ind_first_vol, a0, x1, x2, x3, deg, b):
         th_acc = SPM_TH_ACC
         nr_iter = SPM_NR_ITER
 
-    v, r[1]["C"] = smooth_vol(r[1], flags["interp"], flags["wrap"], flags["fwhm"])
+    v, r[1]["C"] = smooth_vol(r[1], flags["interp"], flags["wrap"], flags["fwhm"],'dicom')
 
     d = np.array(v.shape)
     ss = np.inf
@@ -181,7 +182,14 @@ def spm_realign_rt(r, flags, ind_vol, ind_first_vol, a0, x1, x2, x3, deg, b):
     r0_mat = r[0]["mat"]
     r1_mat = r[1]["mat"]
 
-    for iteration in range(1, nr_iter + 1):
+    template_mat = r[0]["mat"][:3, :3]
+    skip = (1 / np.sqrt(np.sum(template_mat ** 2, axis=0))) * flags["sep"]
+    d = r[0]["dim"][:3]
+    tmp,_,_ = np.mgrid[1:d[0] - 0.5:skip[0], 1:d[1] - 0.5:skip[1], 1:d[2] - 0.5:skip[2]]
+    temp_shape = tmp.shape[::-1]
+
+
+    for iteration in range(1, 2):
 
         y1, y2, y3 = coords(np.zeros((6, 1)), r0_mat, r1_mat, x1, x2, x3)
         msk = np.nonzero((y1 >= 1) & (y1 <= d[0]) & (y2 >= 1) & (y2 <= d[1]) & (y3 >= 1) & (y3 <= d[2]))
@@ -191,7 +199,10 @@ def spm_realign_rt(r, flags, ind_vol, ind_first_vol, a0, x1, x2, x3, deg, b):
             logger.error('There is not enough overlap in '
                          'the images to obtain a solution. Offending image: "%s"', r[1].name)
 
-        f = spm.bsplins(v, y1[msk], y2[msk], y3[msk], deg)
+        deg = np.array([[4, 0], [4, 0], [4, 0]])
+        f = spm.bsplins(v, y1, y2, y3, deg)
+        f = f.reshape(temp_shape).transpose(0, 2, 1).ravel()
+        f = f[msk]
 
         a = a0[msk, :]
         b1 = b[msk]
@@ -207,17 +218,27 @@ def spm_realign_rt(r, flags, ind_vol, ind_first_vol, a0, x1, x2, x3, deg, b):
 
         p = np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0], dtype=float)
         p[lkp] += soln.T
+        # soln不一样
+        # print("ppp2222")
+        # print(lkp)
+        # print(soln.T)
+        # print(r1_mat)
         r1_mat = np.linalg.solve(spm_matrix(p), r1_mat)
 
         pss = ss
         ss = np.sum(b1 ** 2) / b1.size
-        if ((pss - ss) / pss < th_acc) and (countdown == -1):
+
+        if pss == np.inf:
+            pass
+        elif ((pss - ss) / pss < th_acc) and (countdown == -1):
             countdown = 2
+
         if countdown != -1:
             if countdown == 0:
                 break
             countdown -= 1
-
+    # print("ppp3333")
+    # print(r1_mat)
     r[1]["mat"] = r1_mat
     nr_iter = iteration
 
@@ -233,7 +254,7 @@ def coords(p, m1, m2, x1, x2, x3):
     return y1, y2, y3
 
 
-def smooth_vol(r, hld, wrp, fwhm):
+def smooth_vol(r, hld, wrp, fwhm, type):
     s = np.sqrt(np.sum(r["mat"][:3, :3] ** 2, axis=0)) ** (-1) * (fwhm / np.sqrt(8 * np.log(2)))
 
     x = round(6 * s[0])
@@ -258,14 +279,18 @@ def smooth_vol(r, hld, wrp, fwhm):
     k = (z.size - 1) / 2
 
     temp_d = np.array([1, 1, 1], ndmin=2) * int(hld)
+
     d = np.hstack((temp_d.T, np.array(wrp, ndmin=2)))
 
     coef = spm.bsplinc(r["Vol"], d)
-    coef = coef.reshape(r["dim"])
-
+    if type == 'nii':
+        coef = coef.reshape(r["dim"][::-1]).transpose(2,1,0)
+    elif type == 'dicom':
+        coef = coef.reshape(r["dim"][::-1]).transpose(1,2,0)
     v = np.zeros(coef.shape, order='F')
     v = spm.conv_vol(coef, v, x, y, z, np.array([-i, -j, -k], ndmin=2))
-
+    if type == 'dicom':
+        v = v.transpose(1,0,2)
     return v, coef
 
 
@@ -286,3 +311,4 @@ def make_a(m, x1, x2, x3, dg1, dg2, dg3, lkp):
 
 def error_message(r):
     print('There is not enough overlap in the images to obtain a solution. Offending image: {:} \n'.format(r.fname))
+
